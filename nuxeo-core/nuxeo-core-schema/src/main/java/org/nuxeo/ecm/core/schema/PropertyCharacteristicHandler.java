@@ -18,6 +18,11 @@
  */
 package org.nuxeo.ecm.core.schema;
 
+import java.util.List;
+
+import org.apache.commons.lang3.tuple.Pair;
+import org.nuxeo.ecm.core.schema.PropertyDescriptor.Index;
+
 /**
  * Handler used to provide property's characteristics.
  *
@@ -27,11 +32,22 @@ public interface PropertyCharacteristicHandler {
 
     /**
      * Checks if the property represented by the given {@code schema} and {@code path} is secured.
-     * 
+     *
      * @param schema the schema name
      * @param path the property path to test
      * @return whether or not the given property is secured (ie: only administrators can edit it)
      */
     boolean isSecured(String schema, String path);
+
+    /**
+     * Returns the indexed property paths.
+     * <p>
+     * The returned paths are not Nuxeo xpath as they don't have the schema prefix.
+     *
+     * @param schema the schema name (not the prefix)
+     * @return a {@link List} holding the indexed property paths.
+     * @since 11.5
+     */
+    List<Pair<String, Index>> getIndexedProperties(String schema);
 
 }

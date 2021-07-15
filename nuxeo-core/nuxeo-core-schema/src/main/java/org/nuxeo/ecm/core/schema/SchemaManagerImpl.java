@@ -19,6 +19,8 @@
  */
 package org.nuxeo.ecm.core.schema;
 
+import static java.util.stream.Collectors.groupingBy;
+import static java.util.stream.Collectors.toMap;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 import java.io.File;
@@ -37,15 +39,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collector;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.nuxeo.common.Environment;
+import org.nuxeo.ecm.core.schema.PropertyDescriptor.Index;
 import org.nuxeo.ecm.core.schema.types.AnyType;
 import org.nuxeo.ecm.core.schema.types.ComplexType;
 import org.nuxeo.ecm.core.schema.types.CompositeType;
@@ -155,8 +159,12 @@ public class SchemaManagerImpl implements SchemaManager {
     /** @since 9.2 */
     protected Map<String, Map<String, String>> removedProperties = new HashMap<>();
 
-    /** @since 11.1 */
-    protected Set<String> securedProperties = new HashSet<>();
+    /**
+     * Map holding property characteristics with: schema -&gt; path -&gt; characteristic.
+     *
+     * @since 11.5
+     */
+    protected Map<String, Map<String, PropertyDescriptor>> propertyCharacteristics = new HashMap<>();
 
     public SchemaManagerImpl() {
         recomputeCallbacks = new ArrayList<>();
@@ -972,18 +980,17 @@ public class SchemaManagerImpl implements SchemaManager {
     /**
      * @since 11.1
      */
-    protected synchronized void registerSecuredProperty(List<PropertyDescriptor> descriptors) {
-        securedProperties = descriptors.stream()
-                                       .filter(PropertyDescriptor::isSecured)
-                                       .map(descriptor -> computePropertyKey(descriptor.schema, descriptor.name))
-                                       .collect(Collectors.toSet());
+    protected synchronized void registerPropertyCharacteristics(List<PropertyDescriptor> descriptors) {
+        propertyCharacteristics = descriptors.stream()
+                                             .collect(groupingBy(PropertyDescriptor::getSchema,
+                                                                 toMap(PropertyDescriptor::getName, Function.identity())));
     }
 
     /**
      * @since 11.1
      */
-    protected synchronized void clearSecuredProperty() {
-        securedProperties.clear();
+    protected synchronized void clearPropertyCharacteristics() {
+        propertyCharacteristics.clear();
     }
 
     /**
@@ -991,17 +998,33 @@ public class SchemaManagerImpl implements SchemaManager {
      */
     @Override
     public boolean isSecured(String schema, String path) {
-        for (String key = computePropertyKey(schema, cleanPath(path)); //
-             StringUtils.isNotBlank(key); key = key.substring(0, Math.max(key.lastIndexOf('/'), 0))) {
-            if (securedProperties.contains(key)) {
+        return checkPropertyCharacteristic(schema, path, PropertyDescriptor::isSecured);
+    }
+
+    @Override
+    public List<Pair<String, Index>> getIndexedProperties(String schema) {
+        return propertyCharacteristics.getOrDefault(schema, Collections.emptyMap())
+                                      .values()
+                                      .stream()
+                                      .filter(p -> !Index.NONE.equals(p.getIndex()))
+                                      .map(p -> Pair.of(p.getName(), p.getIndex()))
+                                      .collect(Collectors.toList());
+    }
+
+    protected boolean checkPropertyCharacteristic(String schema, String path, Predicate<PropertyDescriptor> predicate) {
+        Map<String, PropertyDescriptor> properties = propertyCharacteristics.getOrDefault(schema,
+                Collections.emptyMap());
+        // iterate on path to check if a parent matches the given predicate
+        if (properties.isEmpty()) {
+            return false;
+        }
+        for (String key = cleanPath(path); StringUtils.isNotBlank(
+                key); key = key.substring(0, Math.max(key.lastIndexOf('/'), 0))) {
+            if (properties.containsKey(key) && predicate.test(properties.get(key))) {
                 return true;
             }
         }
         return false;
-    }
-
-    protected String computePropertyKey(String schema, String path) {
-        return schema + ':' + path;
     }
 
     protected String cleanPath(String path) {

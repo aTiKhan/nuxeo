@@ -45,6 +45,10 @@ public class PropertyDescriptor implements Descriptor {
     @XNode("@secured")
     public Boolean secured;
 
+    // @since 11.5
+    @XNode("@index")
+    protected String index;
+
     @XNode("@remove")
     public boolean remove;
 
@@ -65,6 +69,13 @@ public class PropertyDescriptor implements Descriptor {
         return Boolean.TRUE.equals(secured);
     }
 
+    /**
+     * @since 11.5
+     */
+    public Index getIndex() {
+        return Index.parse(index);
+    }
+
     @Override
     public Descriptor merge(Descriptor o) {
         PropertyDescriptor other = (PropertyDescriptor) o;
@@ -72,6 +83,7 @@ public class PropertyDescriptor implements Descriptor {
         merged.schema = schema;
         merged.name = name;
         merged.secured = other.secured != null ? other.secured : secured;
+        merged.index = other.index != null ? other.index : index;
         return merged;
     }
 
@@ -83,5 +95,24 @@ public class PropertyDescriptor implements Descriptor {
     @Override
     public String toString() {
         return ToStringBuilder.reflectionToString(this);
+    }
+
+    /**
+     * @since 11.5
+     */
+    public enum Index {
+        ASCENDING,
+        DESCENDING,
+        NONE;
+
+        public static Index parse(String index) {
+            if ("ascending".equalsIgnoreCase(index)) {
+                return ASCENDING;
+            } else if ("descending".equalsIgnoreCase(index)) {
+                return DESCENDING;
+            }
+            return NONE;
+        }
+
     }
 }
