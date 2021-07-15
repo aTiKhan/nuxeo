@@ -59,6 +59,10 @@ public class PropertyDescriptor {
     @XNode("@fallback")
     protected String fallback;
 
+    // @since 11.5
+    @XNode("@index")
+    protected String index;
+
     public String getId() {
         return schema + ':' + name;
     }
@@ -90,11 +94,38 @@ public class PropertyDescriptor {
         return REMOVED.equalsIgnoreCase(deprecation);
     }
 
+    /**
+     * @since 11.5
+     */
+    public Index getIndex() {
+        return Index.parse(index);
+    }
+
     public String getFallback() {
         return fallback;
     }
 
+    @Override
     public String toString() {
         return ToStringBuilder.reflectionToString(this);
+    }
+
+    /**
+     * @since 11.5
+     */
+    public enum Index {
+        ASCENDING,
+        DESCENDING,
+        NONE;
+
+        public static Index parse(String index) {
+            if ("ascending".equalsIgnoreCase(index)) {
+                return ASCENDING;
+            } else if ("descending".equalsIgnoreCase(index)) {
+                return DESCENDING;
+            }
+            return NONE;
+        }
+
     }
 }

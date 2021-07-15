@@ -49,10 +49,12 @@ import java.util.stream.Stream;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.nuxeo.common.Environment;
 import org.nuxeo.common.xmap.registry.SingleRegistry;
+import org.nuxeo.ecm.core.schema.PropertyDescriptor.Index;
 import org.nuxeo.ecm.core.schema.types.AnyType;
 import org.nuxeo.ecm.core.schema.types.ComplexType;
 import org.nuxeo.ecm.core.schema.types.CompositeType;
@@ -758,6 +760,16 @@ public class SchemaManagerImpl implements SchemaManager {
         return Optional.ofNullable(propertyCharacteristics.get(schema))
                        .map(props -> props.get(cleanPath(path)))
                        .map(PropertyDescriptor::getFallback);
+    }
+
+    @Override
+    public List<Pair<String, Index>> getIndexedProperties(String schema) {
+        return propertyCharacteristics.getOrDefault(schema, Map.of())
+                                      .values()
+                                      .stream()
+                                      .filter(p -> !Index.NONE.equals(p.getIndex()))
+                                      .map(p -> Pair.of(p.getName(), p.getIndex()))
+                                      .collect(Collectors.toList());
     }
 
     protected boolean checkPropertyCharacteristic(String schema, String path, Predicate<PropertyDescriptor> predicate) {

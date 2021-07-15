@@ -69,6 +69,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bson.Document;
@@ -82,6 +83,8 @@ import org.nuxeo.ecm.core.api.ScrollResult;
 import org.nuxeo.ecm.core.api.lock.LockManager;
 import org.nuxeo.ecm.core.query.QueryParseException;
 import org.nuxeo.ecm.core.query.sql.model.OrderByClause;
+import org.nuxeo.ecm.core.schema.PropertyDescriptor.Index;
+import org.nuxeo.ecm.core.schema.SchemaManager;
 import org.nuxeo.ecm.core.storage.State;
 import org.nuxeo.ecm.core.storage.State.StateDiff;
 import org.nuxeo.ecm.core.storage.dbs.DBSConnection;
@@ -91,6 +94,7 @@ import org.nuxeo.ecm.core.storage.dbs.DBSRepositoryBase;
 import org.nuxeo.ecm.core.storage.dbs.DBSRepositoryBase.IdType;
 import org.nuxeo.ecm.core.storage.dbs.DBSStateFlattener;
 import org.nuxeo.ecm.core.storage.dbs.DBSTransactionState.ChangeTokenUpdater;
+import org.nuxeo.runtime.api.Framework;
 import org.nuxeo.runtime.mongodb.MongoDBOperators;
 import org.nuxeo.runtime.transaction.TransactionHelper;
 
@@ -217,10 +221,35 @@ public class MongoDBConnection extends DBSConnectionBase {
      */
     protected void initRepository(MongoDBRepositoryDescriptor descriptor) {
         // check root presence
-        if (coll.countDocuments(converter.filterEq(KEY_ID, getRootId())) > 0) {
+        boolean rootPresence = countDocuments(converter.filterEq(KEY_ID, getRootId())) > 0;
+        if (!rootPresence || descriptor.isCreateIndexes()) {
+            initRepositoryIndexes(descriptor);
+        }
+        if (rootPresence) {
             mongoDBRepository.readSettings();
             return;
         }
+        // create basic repository structure needed
+        IdType idType = repository.getIdType();
+        if (idType == IdType.sequence || idType == IdType.sequenceHexRandomized || DBSRepositoryBase.DEBUG_UUIDS) {
+            // create the id counter
+            long counter;
+            if (idType == IdType.sequenceHexRandomized) {
+                counter = randomInitialSeed();
+            } else {
+                counter = 0;
+            }
+            MongoCollection<Document> countersColl = mongoDBRepository.getCountersCollection();
+            Document idCounter = new Document();
+            idCounter.put(MONGODB_ID, COUNTER_NAME_UUID);
+            idCounter.put(COUNTER_FIELD, Long.valueOf(counter));
+            countersColl.insertOne(idCounter);
+        }
+        mongoDBRepository.initSettings();
+        initRoot();
+    }
+
+    protected void initRepositoryIndexes(MongoDBRepositoryDescriptor descriptor) {
         // create required indexes
         // code does explicit queries on those
         if (useCustomId) {
@@ -246,8 +275,39 @@ public class MongoDBConnection extends DBSConnectionBase {
         if (!repository.isFulltextDisabled()) {
             coll.createIndex(Indexes.ascending(KEY_FULLTEXT_JOBID));
         }
+        if (!repository.isFulltextSearchDisabled()) {
+            Bson indexKeys = Indexes.compoundIndex( //
+                    Indexes.text(KEY_FULLTEXT_SIMPLE), //
+                    Indexes.text(KEY_FULLTEXT_BINARY) //
+            );
+            IndexOptions indexOptions = new IndexOptions().name(FULLTEXT_INDEX_NAME).languageOverride(LANGUAGE_FIELD);
+            coll.createIndex(indexKeys, indexOptions);
+        }
         coll.createIndex(Indexes.ascending(KEY_ACP + "." + KEY_ACL + "." + KEY_ACE_USER));
         coll.createIndex(Indexes.ascending(KEY_ACP + "." + KEY_ACL + "." + KEY_ACE_STATUS));
+
+        // create contributed indexes
+        var mongoDBIndexedKeys = coll.listIndexes()
+                                     .map(d -> d.get("key", Document.class))
+                                     .into(new ArrayList<>())
+                                     .stream()
+                                     .flatMap(d -> d.keySet().stream())
+                                     .collect(Collectors.toSet());
+        var schemaManager = Framework.getService(SchemaManager.class);
+        // lookup the schemas used in documents
+        Stream.of(schemaManager.getDocumentTypes()).flatMap(d -> d.getSchemas().stream()).forEach(schema -> {
+            var prefix = schema.getNamespace().hasPrefix() ? schema.getNamespace().prefix : schema.getName();
+            schemaManager.getIndexedProperties(schema.getName())
+                         .stream()
+                         .filter(p -> Index.ASCENDING.equals(p.getValue()) || Index.DESCENDING.equals(p.getValue()))
+                         // convert property path to mongoDB index property
+                         .map(p -> Pair.of(prefix + ':' + p.getKey().replaceAll("/(\\*/)?", "."), p.getValue()))
+                         // keep only the ones that don't already exist
+                         .filter(p -> !mongoDBIndexedKeys.contains(p.getKey()))
+                         .map(p -> Index.ASCENDING.equals(p.getRight()) ? Indexes.ascending(p.getLeft())
+                                 : Indexes.descending(p.getLeft()))
+                         .forEach(i -> coll.createIndex(i, new IndexOptions().background(true)));
+        });
         // TODO configure these from somewhere else
         coll.createIndex(Indexes.descending("dc:modified"));
         coll.createIndex(Indexes.ascending("rend:renditionName"));
@@ -261,32 +321,6 @@ public class MongoDBConnection extends DBSConnectionBase {
         // TODO remove it when PropertyCommentManager will be removed
         coll.createIndex(Indexes.ascending("comment:parentId"));
         coll.createIndex(Indexes.ascending("annotation:xpath"));
-        if (!repository.isFulltextSearchDisabled()) {
-            Bson indexKeys = Indexes.compoundIndex( //
-                    Indexes.text(KEY_FULLTEXT_SIMPLE), //
-                    Indexes.text(KEY_FULLTEXT_BINARY) //
-            );
-            IndexOptions indexOptions = new IndexOptions().name(FULLTEXT_INDEX_NAME).languageOverride(LANGUAGE_FIELD);
-            coll.createIndex(indexKeys, indexOptions);
-        }
-        // create basic repository structure needed
-        IdType idType = repository.getIdType();
-        if (idType == IdType.sequence || idType == IdType.sequenceHexRandomized || DBSRepositoryBase.DEBUG_UUIDS) {
-            // create the id counter
-            long counter;
-            if (idType == IdType.sequenceHexRandomized) {
-                counter = randomInitialSeed();
-            } else {
-                counter = 0;
-            }
-            MongoCollection<Document> countersColl = mongoDBRepository.getCountersCollection();
-            Document idCounter = new Document();
-            idCounter.put(MONGODB_ID, COUNTER_NAME_UUID);
-            idCounter.put(COUNTER_FIELD, Long.valueOf(counter));
-            countersColl.insertOne(idCounter);
-        }
-        mongoDBRepository.initSettings();
-        initRoot();
     }
 
     protected synchronized long getNextSequenceId() {
