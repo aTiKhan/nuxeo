@@ -66,7 +66,6 @@ import java.util.stream.StreamSupport;
 
 import javax.resource.spi.ConnectionManager;
 
-import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.bson.Document;
@@ -83,7 +82,6 @@ import org.nuxeo.ecm.core.model.LockManager;
 import org.nuxeo.ecm.core.model.Repository;
 import org.nuxeo.ecm.core.query.QueryParseException;
 import org.nuxeo.ecm.core.query.sql.model.OrderByClause;
-import org.nuxeo.ecm.core.schema.PropertyDescriptor.Index;
 import org.nuxeo.ecm.core.schema.SchemaManager;
 import org.nuxeo.ecm.core.storage.State;
 import org.nuxeo.ecm.core.storage.State.StateDiff;
@@ -368,27 +366,13 @@ public class MongoDBRepository extends DBSRepositoryBase {
         coll.createIndex(Indexes.ascending(KEY_ACP + "." + KEY_ACL + "." + KEY_ACE_STATUS));
 
         // create contributed indexes
-        Set<String> mongoDBIndexedKeys = coll.listIndexes()
-                                     .map(d -> d.get("key", Document.class))
-                                     .into(new ArrayList<>())
-                                     .stream()
-                                     .flatMap(d -> d.keySet().stream())
-                                     .collect(Collectors.toSet());
+
         SchemaManager schemaManager = Framework.getService(SchemaManager.class);
+        MongoDBIndexCreator mongoDBIndexCreator = new MongoDBIndexCreator(schemaManager, coll);
         // lookup the schemas used in documents
-        Stream.of(schemaManager.getDocumentTypes()).flatMap(d -> d.getSchemas().stream()).forEach(schema -> {
-            String prefix = schema.getNamespace().hasPrefix() ? schema.getNamespace().prefix : schema.getName();
-            schemaManager.getIndexedProperties(schema.getName())
-                         .stream()
-                         .filter(p -> Index.ASCENDING.equals(p.getValue()) || Index.DESCENDING.equals(p.getValue()))
-                         // convert property path to mongoDB index property
-                         .map(p -> Pair.of(prefix + ':' + p.getKey().replaceAll("/(\\*/)?", "."), p.getValue()))
-                         // keep only the ones that don't already exist
-                         .filter(p -> !mongoDBIndexedKeys.contains(p.getKey()))
-                         .map(p -> Index.ASCENDING.equals(p.getRight()) ? Indexes.ascending(p.getLeft())
-                                 : Indexes.descending(p.getLeft()))
-                         .forEach(i -> coll.createIndex(i, new IndexOptions().background(true)));
-        });
+        Stream.of(schemaManager.getDocumentTypes())
+              .flatMap(d -> d.getSchemas().stream())
+              .forEach(mongoDBIndexCreator::createIndexes);
     }
 
     protected void initSettings() {
