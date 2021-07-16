@@ -4,6 +4,10 @@
   <extension target="org.nuxeo.ecm.core.schema.TypeService"
     point="schema">
     <schema name="rendition" prefix="rend" src="schemas/rendition.xsd" />
+
+    <property schema="rendition" name="renditionName" index="ascending" />
+    <property schema="rendition" name="sourceId" index="ascending" />
+    <property schema="rendition" name="sourceVersionableId" index="ascending" />
   </extension>
 
   <extension target="org.nuxeo.ecm.core.schema.TypeService"
